@@ -1,0 +1,114 @@
+%%capture
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns # Added for better plotting
+
+import nltk
+import string
+import re
+import warnings
+from nltk.corpus import stopwords
+from wordcloud import WordCloud
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Setup
+nltk.download('stopwords')
+warnings.filterwarnings('ignore')
+
+# 1. Load Data
+try:
+    df = pd.read_csv('tedx_dataset.csv')
+except FileNotFoundError:
+    # Creating dummy data if file doesn't exist for demonstration
+    data = {
+        'title': ['Life hacks', 'Climate Change', 'AI Future', 'Healthy Living', 'Space Travel'],
+        'details': ['How to live better', 'Global warming issues', 'Robots are coming', 'Eat good food', 'Mars mission'],
+        'main_speaker': ['Alex', 'Sam', 'Jane', 'Bob', 'Elon'],
+        'posted': ['Oct 2020', 'Jan 2019', 'Feb 2021', 'Mar 2018', 'Dec 2022']
+    }
+    df = pd.DataFrame(data)
+
+# 2. Robust Date Parsing
+# We coerce errors to NaT (Not a Time) to avoid crashing on bad data
+df['date_obj'] = pd.to_datetime(df['posted'], errors='coerce')
+df['year'] = df['date_obj'].dt.year
+df['month'] = df['date_obj'].dt.month_name()
+
+# Visualization
+plt.figure(figsize=(10, 6))
+df['year'].value_counts().sort_index().plot(kind='bar', color='skyblue')
+plt.title("Number of Talks per Year")
+plt.xlabel("Year")
+plt.ylabel("Count")
+plt.show()
+
+# 3. Text Preprocessing
+# Combine relevant columns
+df['combined_text'] = df['title'] + ' ' + df['details']
+df.dropna(subset=['combined_text'], inplace=True)
+
+# Efficient Cleaning Function
+stop_words = set(stopwords.words('english'))
+
+def clean_text(text):
+    # Lowercase
+    text = str(text).lower()
+    # Remove punctuation using Regex (faster than translate for complex patterns)
+    text = re.sub(r'[^\w\s]', '', text)
+    # Remove stopwords
+    words = [word for word in text.split() if word not in stop_words]
+    return " ".join(words)
+
+df['cleaned_details'] = df['combined_text'].apply(clean_text)
+
+# WordCloud Visualization
+details_corpus = " ".join(df['cleaned_details'])
+plt.figure(figsize=(15, 8))
+wc = WordCloud(max_words=1000, width=800, height=400, background_color='white').generate(details_corpus)
+plt.axis('off')
+plt.imshow(wc)
+plt.show()
+
+# 4. Vectorization (The Efficiency Fix)
+# We fit_transform ONCE to create the matrix for the whole database
+vectorizer = TfidfVectorizer(analyzer='word')
+tfidf_matrix = vectorizer.fit_transform(df['cleaned_details'])
+
+print(f"Matrix Shape: {tfidf_matrix.shape}")
+
+# 5. Recommendation System
+def recommend_talks(query, df, vectorizer, tfidf_matrix, top_k=5):
+    """
+    Recommends talks based on cosine similarity.
+    """
+    # Clean and Transform the query using the SAME vectorizer
+    cleaned_query = clean_text(query)
+    query_vec = vectorizer.transform([cleaned_query])
+
+    # Calculate Cosine Similarity (Matrix Multiplication)
+    # Result is an array of similarity scores for the query vs every document
+    similarity_scores = cosine_similarity(query_vec, tfidf_matrix).flatten()
+
+    # Get the indices of the top_k scores
+    # argsort returns indices that would sort the array, we take the last k and reverse them
+    top_indices = similarity_scores.argsort()[-top_k:][::-1]
+
+    # Fetch results
+    results = df.iloc[top_indices].copy()
+    results['similarity_score'] = similarity_scores[top_indices]
+
+    return results[['main_speaker', 'title', 'details', 'similarity_score']]
+
+# --- Test Case 1 ---
+print("\n--- Recommendation Test 1: Time Management ---")
+query1 = 'Time Management and working hard to become successful in life'
+rec1 = recommend_talks(query1, df, vectorizer, tfidf_matrix)
+display(rec1)
+
+# --- Test Case 2 ---
+print("\n--- Recommendation Test 2: Climate Change ---")
+query2 = 'Climate change and impact on the health. How can we change this world by reducing carbon footprints?'
+rec2 = recommend_talks(query2, df, vectorizer, tfidf_matrix)
+display(rec2)
